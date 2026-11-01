@@ -1,0 +1,16 @@
+name: Probe runners
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "linux ok"; uname -a
+  mac:
+    runs-on: macos-latest
+    steps:
+      - run: echo "mac ok"; sw_vers || true
