@@ -1,0 +1,75 @@
+name: Build IPA v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 修复 Widget 目标的源文件归属
+        run: |
+          python3 -c "p='OutingTracker.xcodeproj/project.pbxproj';s=open(p).read();i=s.index('K01000002000000000000002 /* Sources */ = {');j=s.index('/* End PBXSourcesBuildPhase',i);seg=s[i:j];print('already ok' if 'OutingStore.swift in Sources' in seg else 'patching');k=seg.index('files = (')+9;open(p,'w').write(s if 'OutingStore.swift in Sources' in seg else s[:i]+seg[:k]+'\n\t\t\t\tA0100000A00000000000000A /* OutingStore.swift in Sources */,'+seg[k:]+s[j:])"
+          grep -A4 'K01000002000000000000002 /\* Sources \*/ = {' OutingTracker.xcodeproj/project.pbxproj
+
+      - name: 工具链
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          sw_vers
+
+      - name: 编译 archive（不签名）
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project OutingTracker.xcodeproj \
+            -scheme OutingTracker \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/OutingTracker.xcarchive" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            archive 2>&1 | tee "$RUNNER_TEMP/build.log"
+          test ${PIPESTATUS[0]} -eq 0 || (echo "::error::xcodebuild failed"; grep -E "error:|BUILD FAILED" "$RUNNER_TEMP/build.log" | head -40; exit 1)
+
+      - name: 组装 IPA + 嵌入 entitlements
+        run: |
+          set -e
+          APP="$RUNNER_TEMP/OutingTracker.xcarchive/Products/Applications/OutingTracker.app"
+          test -d "$APP" || (echo "::error::未找到 .app"; find "$RUNNER_TEMP" -name "*.app" -maxdepth 6; exit 1)
+          echo "--- 内容 ---"; ls -1 "$APP"; ls -1 "$APP/PlugIns" 2>/dev/null || echo "(无 PlugIns)"
+          brew install ldid
+          ldid -SApp/OutingTracker.entitlements "$APP/OutingTracker"
+          if [ -d "$APP/PlugIns/OutingWidgetExtension.appex" ]; then
+            ldid -SWidget/OutingTracker.entitlements "$APP/PlugIns/OutingWidgetExtension.appex/OutingWidgetExtension"
+          fi
+          echo "--- 签名后 entitlements ---"
+          ldid -e "$APP/OutingTracker"
+          rm -rf "$RUNNER_TEMP/Payload" && mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP" && zip -qry OutingTracker.ipa Payload
+          ls -lh OutingTracker.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OutingTracker-ipa
+          path: ${{ runner.temp }}/OutingTracker.ipa
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log-v2
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
