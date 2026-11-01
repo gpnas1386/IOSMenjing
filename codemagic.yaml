@@ -1,0 +1,81 @@
+# codemagic.yaml
+# 外出登记 · Codemagic 云构建配置
+#
+# 用途：在 Codemagic 免费额度（每月 500 分钟 macOS M2）上编译出未签名 IPA，
+#      用于 TrollStore（巨魔）安装。无需 Apple 开发者账号、无需 Linux/Mac 本地环境签出。
+#
+# 使用方式见项目根目录 BUILD-WITH-CODEMAGIC.md
+
+workflows:
+  ios-unsigned-ipa:
+    name: 外出登记 · 构建未签名 IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+      vars:
+        SCHEME: OutingTracker
+        PROJECT: OutingTracker.xcodeproj
+    scripts:
+      - name: 环境信息
+        script: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i "ios" || true
+
+      - name: 构建 archive（不签名）
+        script: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$CM_BUILD_DIR/OutingTracker.xcarchive" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ONLY_ACTIVE_ARCH=NO \
+            archive 2>&1 | xcpretty || xcodebuild -version >/dev/null
+
+      - name: 打包成 IPA
+        script: |
+          set -e
+
+          APP="$CM_BUILD_DIR/OutingTracker.xcarchive/Products/Applications/OutingTracker.app"
+          if [ ! -d "$APP" ]; then
+            echo "未找到 .app，尝试查找..."
+            find "$CM_BUILD_DIR" -name "*.app" -maxdepth 6
+            APP=$(find "$CM_BUILD_DIR" -name "OutingTracker.app" -maxdepth 6 | head -1)
+          fi
+          [ -z "$APP" ] && { echo "构建产物缺失"; exit 1; }
+
+          echo "App: $APP"
+          echo "--- 嵌入的扩展 ---"
+          ls -la "$APP/PlugIns" || echo "（无 PlugIns）"
+          echo "--- 二进制架构 ---"
+          file "$APP/OutingTracker" || true
+
+          mkdir -p "$CM_BUILD_DIR/Payload"
+          cp -R "$APP" "$CM_BUILD_DIR/Payload/"
+          cd "$CM_BUILD_DIR"
+          zip -qry OutingTracker.ipa Payload
+
+          ls -lh OutingTracker.ipa
+          echo "IPA 已生成：$CM_BUILD_DIR/OutingTracker.ipa"
+
+    artifacts:
+      - $CM_BUILD_DIR/OutingTracker.ipa
+      - $CM_BUILD_DIR/OutingTracker.xcarchive/Products/Applications/OutingTracker.app
+
+    publishing:
+      email:
+        recipients:
+          # 改成您的邮箱，构建完成后会收到 IPA 下载链接
+          - you@example.com
+        notify:
+          success: true
+          failure: true
