@@ -75,7 +75,7 @@ workflows:
       email:
         recipients:
           # 改成您的邮箱，构建完成后会收到 IPA 下载链接
-          - you@example.com
+          - gpnas1386@gmail.com
         notify:
           success: true
           failure: true
