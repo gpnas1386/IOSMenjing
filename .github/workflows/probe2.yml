@@ -1,0 +1,27 @@
+name: Probe2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  a-macos14:
+    runs-on: macos-14
+    steps:
+      - run: echo a; sw_vers
+  b-checkout-latest:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo b
+  c-checkout-14:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo c
+  d-14-timeout:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - run: echo d
