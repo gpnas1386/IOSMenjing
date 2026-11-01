@@ -1,0 +1,69 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 工具链
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: 编译 archive（不签名）
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project OutingTracker.xcodeproj \
+            -scheme OutingTracker \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/OutingTracker.xcarchive" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            archive 2>&1 | tee "$RUNNER_TEMP/build.log"
+          test ${PIPESTATUS[0]} -eq 0 || (echo "::error::xcodebuild failed"; grep -E "error:|BUILD FAILED" "$RUNNER_TEMP/build.log" | head -40; exit 1)
+
+      - name: 组装 IPA + 嵌入 entitlements
+        run: |
+          set -e
+          APP="$RUNNER_TEMP/OutingTracker.xcarchive/Products/Applications/OutingTracker.app"
+          test -d "$APP" || (echo "::error::未找到 .app"; find "$RUNNER_TEMP" -name "*.app" -maxdepth 6; exit 1)
+          echo "--- 内容 ---"; ls -1 "$APP"; ls -1 "$APP/PlugIns" 2>/dev/null || echo "(无 PlugIns)"
+          brew install ldid
+          ldid -SApp/OutingTracker.entitlements "$APP/OutingTracker"
+          if [ -d "$APP/PlugIns/OutingWidgetExtension.appex" ]; then
+            ldid -SWidget/OutingTracker.entitlements "$APP/PlugIns/OutingWidgetExtension.appex/OutingWidgetExtension"
+          fi
+          echo "--- 签名后 entitlements ---"
+          ldid -e "$APP/OutingTracker"
+          rm -rf "$RUNNER_TEMP/Payload" && mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP" && zip -qry OutingTracker.ipa Payload
+          ls -lh OutingTracker.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OutingTracker-ipa
+          path: ${{ runner.temp }}/OutingTracker.ipa
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
